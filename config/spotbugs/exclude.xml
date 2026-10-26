@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Accepted findings. Every entry names the pattern, where it applies, and why it is safe. -->
+<FindBugsFilter>
+    <!--
+      java.util.Random is used for weight init, data sampling and token sampling, never for secrets, tokens or
+      keys. It must stay seeded and reproducible: checkpoints restore its exact position so a resumed run matches
+      an uninterrupted one. Anything security-sensitive added later must use SecureRandom; this exclusion covers
+      the model code only, not the HTTP server's request handling.
+    -->
+    <Match>
+        <Bug pattern="PREDICTABLE_RANDOM"/>
+        <Or>
+            <Class name="com.myllm.Main"/>
+            <Class name="com.myllm.eval.Evaluator"/>
+            <Class name="com.myllm.generator.Generator"/>
+            <Class name="com.myllm.persist.CheckpointIO"/>
+            <Class name="com.myllm.persist.ModelIO"/>
+            <Class name="com.myllm.server.ChatServer"/>
+        </Or>
+        <Method name="~(train|finetune|runTraining|plotReport|&lt;init&gt;|load|readBody)"/>
+    </Match>
+
+    <!--
+      Deserializes a java.util.Random from a checkpoint. An ObjectInputFilter ("java.util.Random;!*") rejects
+      every other class before it is created, and the byte length is capped, so no gadget chain can run.
+    -->
+    <Match>
+        <Bug pattern="OBJECT_DESERIALIZATION"/>
+        <Class name="com.myllm.persist.CheckpointIO"/>
+        <Method name="readRandom"/>
+    </Match>
+
+    <!--
+      CorpusCleaner prepares training text; it is not an input validator guarding anything. The NFKD
+      normalisation is followed by a filter that keeps printable ASCII only, so nothing slips past it.
+    -->
+    <Match>
+        <Bug pattern="IMPROPER_UNICODE,MODIFICATION_AFTER_VALIDATION"/>
+        <Class name="com.myllm.corpus.CorpusCleaner"/>
+    </Match>
+</FindBugsFilter>

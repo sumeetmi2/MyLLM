@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs runs for security only: the SECURITY category holds Find Security Bugs (OWASP) detectors
+  (injection, path traversal, unsafe deserialization, weak crypto and randomness, XSS, SSRF, ...).
+  General bug patterns are left to Error Prone, which already runs on every compile.
+-->
+<FindBugsFilter>
+    <Match>
+        <Bug category="SECURITY"/>
+    </Match>
+</FindBugsFilter>

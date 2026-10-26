@@ -1,0 +1,130 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'checkstyle'
+    id 'net.ltgt.errorprone' version '5.1.1'
+    id 'com.diffplug.spotless' version '8.6.0'
+    id 'com.github.spotbugs' version '6.5.11'
+}
+
+group = 'com.myllm'
+version = '0.1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+// only Maven Central. A global ~/.gradle/init.gradle may add private mirrors to every build; dropping them here
+// keeps their credentials out of this build
+repositories.clear()
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    errorprone 'com.google.errorprone:error_prone_core:2.51.0'
+    spotbugsPlugins 'com.h3xstream.findsecbugs:findsecbugs-plugin:1.14.0'
+
+    testImplementation platform('org.junit:junit-bom:5.11.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'com.myllm.Main'
+    applicationDefaultJvmArgs = ['--add-modules', 'jdk.incubator.vector']
+}
+
+// forward terminal input to the app so the interactive "chat" mode can read prompts
+run {
+    standardInput = System.in
+}
+
+test {
+    useJUnitPlatform()
+    // the d=768, 12-block residual test holds ~340MB of float weights
+    maxHeapSize = "2g"
+}
+
+tasks.withType(JavaCompile).configureEach { task ->
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['--add-modules', 'jdk.incubator.vector', '-Xlint:all']
+    // Error Prone (Google's compile-time bug finder, used by Guava and Caffeine) runs inside javac
+    options.errorprone {
+        disableWarningsInGeneratedCode = true
+        // records over primitive arrays (Matrix, Batch, ...) are deliberate: they hand the raw buffer to the
+        // math kernels without copying, and the records that need value equality override equals themselves
+        disable 'ArrayRecordComponent'
+        // the fix it suggests is Guava's Splitter; every split here is on a fixed separator and empty pieces are skipped
+        disable 'StringSplitter'
+        // security checks that are off by default: Java deserialization, JNDI lookups and custom class loaders
+        // are the classic remote-code-execution entry points. A deliberate use is suppressed at the call site
+        error 'BanSerializableRead', 'BanJNDI', 'BanClassLoader'
+    }
+
+    // Fail on any javac or Error Prone warning. -Werror can't be used: JDK 21 always warns
+    // "using incubating module(s)" for the Vector API and that warning can't be switched off
+    def output = new StringBuilder()
+    doFirst { output.setLength(0) }
+    logging.addStandardErrorListener({ output.append(it) } as StandardOutputListener)
+    logging.addStandardOutputListener({ output.append(it) } as StandardOutputListener)
+    doLast {
+        def warnings = output.readLines().findAll { it.contains('warning:') && !it.contains('incubating module') }
+        if (!warnings.isEmpty()) {
+            throw new GradleException("${task.name}: ${warnings.size()} compiler warning(s), see the output above")
+        }
+    }
+}
+
+tasks.withType(Test).configureEach {jvmArgs '--add-modules', 'jdk.incubator.vector'}
+
+// Checkstyle (rules modelled on Apache Kafka's) runs as part of `./gradlew check` and `./gradlew build`
+checkstyle {
+    toolVersion = '11.1.0'
+    maxWarnings = 0
+}
+
+// Formatting is owned by palantir-java-format (4-space indent, 120 columns): `./gradlew spotlessApply` rewrites
+// the files, `spotlessCheck` (part of `check` and `lint`) fails if any file isn't formatted
+spotless {
+    java {
+        target 'src/*/java/**/*.java'
+        palantirJavaFormat('2.100.0')
+        removeUnusedImports()
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+
+// Security: SpotBugs with the Find Security Bugs plugin (OWASP), on the compiled main classes, reporting only
+// the SECURITY category (config/spotbugs/include.xml). Accepted findings go in config/spotbugs/exclude.xml
+spotbugs {
+    toolVersion = '4.10.3'
+    effort = com.github.spotbugs.snom.Effort.valueOf('MAX')
+    reportLevel = com.github.spotbugs.snom.Confidence.valueOf('LOW')
+    includeFilter = file('config/spotbugs/include.xml')
+    excludeFilter = file('config/spotbugs/exclude.xml')
+}
+tasks.named('spotbugsTest') {
+    enabled = false
+}
+tasks.withType(com.github.spotbugs.snom.SpotBugsTask).configureEach {
+    jvmArgs = ['--add-modules', 'jdk.incubator.vector']
+    reports {
+        html.required = true
+        xml.required = true
+    }
+}
+
+// one command for every static check, without running the test suite
+tasks.register('lint') {
+    group = 'verification'
+    description = 'Runs javac lint, Error Prone, Checkstyle, the format check, javadoc lint, the docs check and SpotBugs security.'
+    dependsOn 'spotlessCheck', 'checkstyleMain', 'checkstyleTest', 'javadoc', 'checkDocs', 'spotbugsMain'
+}
+
+// README generation, docs checks, javadoc lint and the git hook installer
+apply from: 'gradle/docs.gradle'
+check.dependsOn 'checkDocs', 'javadoc'

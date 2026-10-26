@@ -1,0 +1,11 @@
+// Plugins come from the public repositories first. A global ~/.gradle/init.gradle can add a private mirror to every
+// build; listing these first means its expired credentials can't break plugin resolution (build.gradle does the
+// same for dependencies)
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'MyLLM'

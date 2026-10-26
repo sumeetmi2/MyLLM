@@ -1,0 +1,135 @@
+// Documentation tasks.
+//
+// README.md has sections between "BEGIN GENERATED: <name>" and "END GENERATED: <name>" markers that are written
+// from the code, so they can't drift from it:
+//   usage     the output of `Main help`
+//   packages  the first sentence of every package-info.java
+//
+//   ./gradlew updateDocs   rewrites those sections (the pre-commit hook runs this)
+//   ./gradlew checkDocs    fails if they are out of date, or if a Markdown link or a backticked repo path
+//                          in a *.md file points at something that doesn't exist (part of `lint`)
+
+def readmeFile = file('README.md')
+def packageRoot = file('src/main/java')
+
+// `Main help` output, run from the freshly compiled classes
+def usageText = providers.javaexec {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = application.mainClass
+    jvmArgs '--add-modules', 'jdk.incubator.vector'
+    args 'help'
+}.standardOutput.asText
+
+// summary = the Javadoc text up to the first period followed by whitespace, like the javadoc tool's summary
+def packageSummaries = {
+    def rows = []
+    packageRoot.eachFileRecurse { f ->
+        if (f.name != 'package-info.java') {
+            return
+        }
+        def text = f.text
+        def doc = (text =~ /(?s)\/\*\*(.*?)\*\//)
+        def name = (text =~ /package\s+([\w.]+)\s*;/)[0][1]
+        def body = doc.find() ? doc.group(1).replaceAll(/(?m)^\s*\*/, ' ').replaceAll(/\s+/, ' ').trim() : ''
+        def summary = (body =~ /^(.*?\.)(\s|$)/).find() ? (body =~ /^(.*?\.)(\s|$)/)[0][1] : body
+        summary = summary.replaceAll(/\{@(?:code|link) ([^}]*)\}/, '`$1`')
+        rows << [name, summary]
+    }
+    rows.sort { it[0] }
+}
+
+def generatedSections = {
+    def usage = usageText.get().readLines()
+            .findAll { !it.startsWith('WARNING: Using incubator modules') }
+            .join('\n').stripTrailing()
+    def packages = ['| package | what it holds |', '|---|---|']
+    packageSummaries().each { name, summary ->
+        def missing = summary ? summary : '**no package-info.java Javadoc**'
+        packages << "| `${name}` | ${missing.replace('|', '\\|')} |"
+    }
+    [
+        usage   : "```\n${usage}\n```",
+        packages: packages.join('\n'),
+    ]
+}
+
+def render = { String readme, Map sections ->
+    def out = readme
+    sections.each { name, content ->
+        def pattern = ~/(?s)(<!-- BEGIN GENERATED: ${name} [^\n]*-->\n).*?(<!-- END GENERATED: ${name} -->)/
+        def m = pattern.matcher(out)
+        if (!m.find()) {
+            throw new GradleException("README.md has no GENERATED: ${name} markers")
+        }
+        out = out.substring(0, m.end(1)) + content + '\n' + out.substring(m.start(2))
+    }
+    out
+}
+
+tasks.register('updateDocs') {
+    group = 'documentation'
+    description = 'Rewrites the generated sections of README.md from the code.'
+    dependsOn 'classes'
+    doLast {
+        def before = readmeFile.text
+        def after = render(before, generatedSections())
+        if (after != before) {
+            readmeFile.text = after
+            logger.lifecycle('updateDocs: README.md updated')
+        }
+    }
+}
+
+tasks.register('checkDocs') {
+    group = 'verification'
+    description = 'Fails if README.md generated sections are stale or a Markdown file links to a missing path.'
+    dependsOn 'classes'
+    doLast {
+        def problems = []
+        def readme = readmeFile.text
+        if (render(readme, generatedSections()) != readme) {
+            problems << 'README.md: generated sections are out of date, run ./gradlew updateDocs'
+        }
+        def markdown = fileTree(projectDir) {
+            include '*.md', 'docs/**/*.md', 'config/**/*.md', 'scripts/**/*.md'
+        }
+        markdown.each { md ->
+            def text = md.text.replaceAll(/(?s)```.*?```/, '')
+            // relative links: [text](path) and [text](path#anchor)
+            (text =~ /\]\(([^)#\s]+)(?:#[^)]*)?\)/).each { match ->
+                def target = match[1]
+                if (!(target ==~ /^[a-z]+:.*/) && !new File(md.parentFile, target).exists()) {
+                    problems << "${md.name}: link to missing file ${target}"
+                }
+            }
+            // backticked paths into the source tree, e.g. `src/main/java/com/myllm/Main.java`
+            (text =~ /`((?:src|config|scripts|gradle|docs|\.githooks)\/[^`*<>\s]*)`/).each { match ->
+                // `src/...` is a pattern, not a path
+                if (!match[1].endsWith('...') && !file(match[1]).exists()) {
+                    problems << "${md.name}: path ${match[1]} does not exist"
+                }
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException('checkDocs found ' + problems.size() + ' problem(s):\n  ' + problems.join('\n  '))
+        }
+    }
+}
+
+// Javadoc is checked for broken syntax, bad references and malformed tags, but not for missing comments:
+// javadoc's "missing" group would demand a comment on every public member, which this codebase doesn't do
+tasks.named('javadoc', Javadoc) {
+    options.encoding = 'UTF-8'
+    options.addStringOption('-add-modules', 'jdk.incubator.vector')
+    options.addStringOption('Xdoclint:all,-missing', '-quiet')
+}
+
+// one-time setup per clone: point git at the hooks in .githooks
+tasks.register('installGitHooks', Exec) {
+    group = 'build setup'
+    description = 'Makes git use the hooks in .githooks (pre-commit: regenerate docs, run lint).'
+    commandLine 'git', 'config', 'core.hooksPath', '.githooks'
+    doLast {
+        logger.lifecycle('git hooks installed from .githooks')
+    }
+}

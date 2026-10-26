@@ -1,0 +1,45 @@
+#!/bin/sh
+# Keeps the generated parts of README.md in sync with the code and runs the static checks before every commit.
+# Installed with `./gradlew installGitHooks`; skip once with `git commit --no-verify`. See CONTRIBUTING.md.
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+# runs gradle quietly, minus the "incubating module" warning the Vector API prints on every compile
+gradle_quiet() {
+    log=$(mktemp)
+    status=0
+    ./gradlew -q --console=plain "$@" >"$log" 2>&1 || status=$?
+    grep -vE 'incubating module|^[0-9]+ warnings?$' "$log" || true
+    rm -f "$log"
+    return "$status"
+}
+
+# nothing to check when the commit touches no code, build or docs files
+if ! git diff --cached --name-only --diff-filter=ACMRD | grep -qE '\.(java|gradle|md|xml|html)$|^\.githooks/'; then
+    exit 0
+fi
+
+# whether README.md has edits you haven't staged; those must not be swept into the commit by the git add below
+readme_had_unstaged=0
+git diff --quiet -- README.md || readme_had_unstaged=1
+
+echo "pre-commit: regenerating docs"
+gradle_quiet updateDocs
+
+if ! git diff --quiet -- README.md; then
+    if [ "$readme_had_unstaged" -eq 0 ]; then
+        git add README.md
+        echo "pre-commit: README.md generated sections changed and were staged"
+    else
+        echo "pre-commit: README.md generated sections changed, but README.md also has unstaged edits."
+        echo "            Review it, stage what belongs in this commit, and commit again."
+        exit 1
+    fi
+fi
+
+echo "pre-commit: running ./gradlew lint"
+if ! gradle_quiet lint; then
+    echo "pre-commit: lint failed. Fix the findings above (./gradlew spotlessApply fixes formatting) and commit again."
+    exit 1
+fi

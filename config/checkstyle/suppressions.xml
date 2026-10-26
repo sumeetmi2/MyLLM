@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+        "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+        "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+
+<!-- Every suppression says why. Prefer fixing the code over adding a line here. -->
+<suppressions>
+    <!-- a test class is documented by its test names -->
+    <suppress checks="MissingJavadocType" files="[\\/]src[\\/]test[\\/]"/>
+</suppressions>

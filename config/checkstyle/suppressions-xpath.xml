@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+        "-//Checkstyle//DTD SuppressionXpathFilter Experimental Configuration 1.2//EN"
+        "https://checkstyle.org/dtds/suppressions_1_2_xpath_experimental.dtd">
+
+<!-- Suppressions that need the syntax tree rather than a file name. Every entry says why. -->
+<suppressions>
+    <!-- nested types are result holders and small value types; the enclosing class's Javadoc covers them -->
+    <suppress-xpath checks="MissingJavadocType"
+                    query="//*[self::CLASS_DEF or self::INTERFACE_DEF or self::ENUM_DEF or self::RECORD_DEF]/OBJBLOCK//*[self::CLASS_DEF or self::INTERFACE_DEF or self::ENUM_DEF or self::RECORD_DEF]"/>
+</suppressions>
